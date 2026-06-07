@@ -30,52 +30,67 @@ function findMatchingTemplate(analysis, brain) {
 
   var a = analysis || {};
   var outfit = (a.outfit || '').toLowerCase();
-  var pose = (a.pose || '').toLowerCase();
+  var poses = [];
+  if (Array.isArray(a.pose)) {
+    poses = a.pose.map(function(s) { return typeof s === 'string' ? s.toLowerCase() : ''; });
+  } else if (typeof a.pose === 'string' && a.pose !== 'unknown') {
+    poses = [a.pose.toLowerCase()];
+  }
   var actions = (a.actions || []).map(function(s) { return s.toLowerCase(); });
   var bodyFocus = (a.bodyFocus || []).map(function(s) { return s.toLowerCase(); });
+  var cosplay = (a.cosplay || '').toLowerCase();
   var isVideo = a.type === 'video';
+  var env = a.environment || {};
+  var envType = (env.type || '').toLowerCase();
+  var clothing = a.clothingDetail || {};
+  var clothType = (clothing.type || '').toLowerCase();
+  var expression = (a.expression || '').toLowerCase();
 
   // Scoring tiap template
   var scored = [];
   for (var ti = 0; ti < templates.length; ti++) {
     var t = templates[ti];
     var score = 0;
+    var cat = (t.category || '').toLowerCase();
     
-    // Cocok tipe (foto/video)
-    if (t.type === a.type) score += 20;
-    else if (!t.type) score += 10;
+    // Cocok tipe (foto/video) + 15
+    if (t.type === a.type) score += 15;
     
-    // Cocok NSFW/SFW
-    if (t.nsfw === a.nsfw) score += 15;
+    // Cocok NSFW/SFW + 10
+    if (t.nsfw === a.nsfw) score += 10;
     
-    // Cocok action (paling penting)
+    // Cocok action (paling penting) + 25 per match
     if (actions.length > 0) {
       for (var ai = 0; ai < actions.length; ai++) {
-        if (t.category && t.category.toLowerCase().indexOf(actions[ai]) !== -1) {
-          score += 25;
-        }
+        if (cat.indexOf(actions[ai]) !== -1) score += 25;
       }
     }
     
-    // Cocok body focus
+    // Cocok body focus + 10 per match
     if (bodyFocus.length > 0) {
       for (var bi = 0; bi < bodyFocus.length; bi++) {
-        if (t.category && t.category.toLowerCase().indexOf(bodyFocus[bi]) !== -1) {
-          score += 15;
-        }
+        if (cat.indexOf(bodyFocus[bi]) !== -1) score += 10;
       }
     }
     
-    // Cocok pose
-    if (pose && t.category) {
-      var catWords = t.category.toLowerCase().split(/[->_ ]+/);
-      for (var ci = 0; ci < catWords.length; ci++) {
-        if (pose.indexOf(catWords[ci]) !== -1 || catWords[ci].indexOf(pose) !== -1) {
-          score += 10;
-          break;
-        }
+    // Cocok pose (array) + 15 per match
+    if (poses.length > 0) {
+      for (var pi = 0; pi < poses.length; pi++) {
+        if (cat.indexOf(poses[pi]) !== -1) score += 15;
       }
     }
+    
+    // Cocok cosplay + 10
+    if (cosplay && cat.indexOf(cosplay) !== -1) score += 10;
+    
+    // Cocok environment + 5
+    if (envType && cat.indexOf(envType) !== -1) score += 5;
+    
+    // Cocok clothing type + 5
+    if (clothType && cat.indexOf(clothType) !== -1) score += 5;
+    
+    // Cocok expression + 5
+    if (expression && cat.indexOf(expression) !== -1) score += 5;
     
     scored.push({ template: t, score: score, text: t.text });
   }
@@ -86,10 +101,10 @@ function findMatchingTemplate(analysis, brain) {
   // Return best match (kalo skor minimal 20)
   if (scored.length > 0 && scored[0].score >= 20) {
     var t = scored[0];
-    // Replace template variables
     var text = t.text;
     if (outfit) text = text.replace(/{outfit}/g, outfit);
-    if (analysis.outfit) text = text.replace(/{theme}/g, analysis.outfit.toLowerCase().replace(/\s+/g, '_'));
+    if (a.outfit) text = text.replace(/{theme}/g, a.outfit.toLowerCase().replace(/\s+/g, '_'));
+    if (cosplay) text = text.replace(/{cosplay}/g, cosplay);
     t.text = text;
     return t;
   }
@@ -132,21 +147,33 @@ async function generateDescription(context) {
   if (time.hour >= 22 || time.hour <= 4) mood = 'horny nocturnal';
   else if (time.isWeekend) mood = 'weekend chill';
   
-  var parts = (analysis.bodyFocus || []).join(', ') || 'unknown';
+  var parts = (analysis.bodyFocus || []).join(', ') || 'general';
   var outfit = analysis.outfit || 'variasi';
   var cosplay = analysis.cosplay || '';
-  var pose = analysis.pose || 'unknown';
+  var poses = Array.isArray(analysis.pose) ? analysis.pose.join(', ') : (analysis.pose || 'unknown');
   var isVid = analysis.type === 'video' ? 'video' : 'foto';
+  var env = analysis.environment || {};
+  var envDesc = env.type ? env.type + (env.lighting ? ', ' + env.lighting : '') : '';
+  var clothing = analysis.clothingDetail || {};
+  var clothDesc = clothing.type ? clothing.type + (clothing.color ? ' ' + clothing.color : '') : '';
+  var expression = analysis.expression || '';
+  var fileAge = analysis.fileAge || '';
+  var isFresh = analysis.isFresh === true;
+  var shotType = analysis.shotType || '';
   
   var sp = 'Kamu Baby Val. ' + persona.PERSONA.substring(0, 150) +
     'Buat caption konten Tevi (@cutieval). 1 kalimat 4-10 kata, bikin penasaran. ' +
     'NO emoji NO hashtag NO titik. Genit, playful. ' +
     'DILARANG: semoga, mungkin, sayang, nyamber, posing, buka kaki, bahasa daerah.';
   
-  var up = 'Upload ' + isVid + ':\n' +
+  var up = 'Upload ' + isVid + ' (shot: ' + shotType + '):\n' +
     'Outfit: ' + outfit + (cosplay ? ' (cosplay ' + cosplay + ')' : '') +
-    ' | Pose: ' + pose +
+    (clothDesc ? ' [' + clothDesc + ']' : '') +
+    ' | Pose: ' + poses +
     ' | Fokus: ' + parts +
+    (expression ? ' | Ekspresi: ' + expression : '') +
+    (envDesc ? ' | Lokasi: ' + envDesc : '') +
+    (isFresh ? ' | KONTEN BARU' : '') +
     ' | Mood: ' + mood +
     ' | ' + time.timeOfDay + '\n' +
     'CAPTION (1 kalimat, tanpa titik):';
