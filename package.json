@@ -1,0 +1,8 @@
+{
+  "name": "babyval-brain",
+  "version": "1.0.0",
+  "description": "AI Content Brain untuk Baby Val — modular, evolving, platform-agnostic",
+  "main": "index.js",
+  "keywords": ["babyval", "content", "ai", "brain"],
+  "license": "MIT"
+}
