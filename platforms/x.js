@@ -1,5 +1,5 @@
 /**
- * X / TWITTER — Platform generator
+ * X / TWITTER — Platform generator (OPTIMIZED v2: 2-pass, retry 2x)
  * Dipanggil oleh Brain.generate('x', context)
  */
 var callAI = require('../lib/deepseek').callAI;
@@ -13,47 +13,54 @@ async function generate(context) {
   var topikAsli = context.topikAsli;
   var time = validator.getTimeContext();
   var gc = knowledge.findGameCtx(topic, context._research);
-  
+
+  // Konteks reddit — compressed
   var rl = '';
   if (gc && gc.length) {
-    rl = gc.slice(0, 3).map(function(g) { return '- [' + g.sub + '] ' + g.text; }).join('\n');
+    rl = gc.slice(0, 2).map(function(g) { return '[' + g.sub + '] ' + g.text.substring(0, 100); }).join('\n');
   } else if (topikAsli) {
-    rl = '- ' + topikAsli;
+    rl = topikAsli.substring(0, 150);
   }
 
-  var goodEx = knowledge.getGoodExamples(context._goodContent, 'x', 2);
-  var goodPats = knowledge.getGoodPatterns(context._goodContent);
+  // Compressed system prompt
+  var sp = 'Kamu Baby Val. ' + persona.PERSONA.substring(0, 150) +
+    'Buat tweet game X (@cutieval). Indo+Inggris santai. 1-2 kalimat pendek. ' +
+    'NO emoji. Maks 1 URL. Natural, pancing diskusi. Gak formal. ' +
+    'DILARANG: bahasa daerah, disclaimer AI, kata semoga/mungkin.';
 
-  var sp = 'Kamu adalah Baby Val. ' + persona.PERSONA + '\n' +
-    'Buat tweet game dgn gaya Baby Val. Indonesia campur Inggris. Tujuan: pancing diskusi seru.\n' +
-    'RULES: 1-3 kalimat pendek, natural. NO emoji. Jangan maksa komen. Jangan kesimpulan formal. MAX 1 URL per tweet. Kalo konten streaming, pake link Tevi bukan babyval.com.\n' +
-    '\nREFERENSI KONTEN TERBAIK:\n' + goodEx + '\n\n' + goodPats;
+  var up = 'Tweet X:\n' +
+    'Game: "' + topic + '"\n' +
+    (rl ? 'Konteks:\n' + rl + '\n' : '') +
+    'Waktu: ' + time.timeOfDay + ', ' + time.day + (time.isWeekend ? ' (wiken)' : '') + '\n' +
+    'TULISAN (1-2 kalimat, tanpa emoji, tanpa label):';
 
-  var up = 'Buat tweet X untuk @cutieval.\n' +
-    'KONTEKS:\n' +
-    '- Game: "' + topic + '"\n' +
-    (topikAsli ? '- Reddit: "' + topikAsli + '"\n' : '') +
-    (rl ? '- Reddit diskusi:\n' + rl + '\n' : '') +
-    '- Waktu: ' + time.timeOfDay + ', ' + time.day + (time.isWeekend ? ' (weekend)' : '') + '\n' +
-    'TULISAN (1-3 kalimat, tanpa emoji):';
-
-  for (var retry = 0; retry < 3; retry++) {
+  for (var retry = 0; retry < 2; retry++) {
     try {
-      var t1 = await callAI(sp, up, 150);
+      var spFinal = sp;
+      if (retry === 1) {
+        var goodEx = knowledge.getGoodExamples(context._goodContent, 'x', 1);
+        if (goodEx) spFinal = sp + ' REF GAYA: ' + goodEx.substring(0, 150);
+      }
+
+      // PASS 1: Generate
+      var t1 = await callAI(spFinal, up, 100);
+      if (!t1 || t1.trim().length < 3) continue;
+
+      // PASS 2: Humanize
       var t2 = await humanize(t1, { topic: topic, topikAsli: topikAsli, time: time });
-      
+
       var bad = validator.checkBad(t2, context._badContent);
-      if (bad) { console.log('[BRAIN X] REJECTED [' + bad + ']: ' + t2.substring(0, 50)); continue; }
-      if (validator.checkDoubleUrl(t2)) { console.log('[BRAIN X] REJECTED [double URL]: ' + t2.substring(0, 50)); continue; }
-      
+      if (bad) { console.log('[BRAIN X] retry ' + retry + ' REJECTED: ' + bad); continue; }
+      if (validator.checkDoubleUrl(t2)) { console.log('[BRAIN X] retry ' + retry + ' REJECTED [double URL]'); continue; }
+
       return { text: t2, source: 'ai_humanized' };
     } catch(e) {
       console.log('[BRAIN X] retry ' + retry + ' error:', (e.message || '').substring(0, 50));
     }
   }
-  
+
   // Fallback
-  console.log('[BRAIN X] all retries failed, fallback');
+  console.log('[BRAIN X] fallback');
   try {
     var te = context._templateEngine;
     if (te) { var r = te.generate('x', 'game_discussion', { topic: topic }); return { text: r.text, source: 'template' }; }
@@ -62,20 +69,12 @@ async function generate(context) {
 }
 
 async function humanize(text, ctx) {
-  var sp = 'Kamu quality editor konten Baby Val. Kriteria: 1. Monoton? 2. Bot/kurang natural? 3. Cocok initiate?\n' +
-    'Kalo perlu humanize, bikin lebih alami. Kalo perlu final touch, perbaiki.\n' +
-    'GOALS: Kedengeran manusia, pancing penasaran, Indonesia natural campur Inggris, gak kaku.';
-  var up = 'Review dan perbaiki tweet:\n"' + text + '"\n\n' +
-    'KONTEKS: ' + (ctx.topic || '') + ' ' + (ctx.topikAsli || '') + ' ' +
-    (ctx.time ? ctx.time.timeOfDay + ' ' + ctx.time.day : '') + '\n\n' +
-    '1. Kritik apa? 2. Versi final:\nTULIS VERSI FINAL SAJA (tanpa label, tanpa emoji):';
+  var sp = 'Quality editor X. Natural? Engaging? Pancing diskusi? Refine biar makin alami, cocok buat tweet game. Indo+Iggris santai.';
+  var up = 'Refine tweet:\n"' + text + '"\n' + (ctx.topic || '') + ' ' + (ctx.topikAsli || '') + '\n\nVersi final (langsung aja, tanpa label):';
   try {
-    var f = await callAI(sp, up, 150);
+    var f = await callAI(sp, up, 80);
     f = f.replace(/^["']+|["']+$/g, '').trim();
-    var fi = f.indexOf('Versi final:');
-    if (fi !== -1) f = f.substring(fi + 12).trim();
-    else { var m = f.match(/2\.\s*([^]+)/); if (m && m[1]) f = m[1].trim(); }
-    return f.replace(/[.?!]{2,}$/g, function(m) { return m[0]; });
+    return f || text;
   } catch(e) { return text; }
 }
 

@@ -1,5 +1,5 @@
 /**
- * TEVI — Platform generator
+ * TEVI — Platform generator (OPTIMIZED v2: 2-pass, retry 2x)
  * Dipanggil oleh Brain.generate('tevi', context)
  */
 var callAI = require('../lib/deepseek').callAI;
@@ -25,37 +25,46 @@ async function generate(context) {
     vcs: 'Tawaran VCS',
     membership: 'Promo membership babyval.com'
   };
-  
-  var goodEx = knowledge.getGoodExamples(context._goodContent, 'tevi', 2);
 
-  var sp = 'Kamu Baby Val. ' + persona.PERSONA + '\n' +
-    'Buat text post Tevi (@cutieval). NSFW. Tujuan: bikin penasaran + mau topup.\n' +
-    'RULES: 1 kalimat 4-10 kata. NO emoji NO hashtag NO tanda kutip NO titik. Jangan spill semua. Jangan vulgar. DILARANG pake kata: semoga, mungkin, sayang, nyamber, nyamberin, posing, buka kaki.\n' +
-    '\nREFERENSI KONTEN TERBAIK:\n' + goodEx;
+  // Compressed system prompt
+  var sp = 'Kamu Baby Val. ' + persona.PERSONA.substring(0, 150) +
+    'Buat text post Tevi (@cutieval) NSFW. 1 kalimat 4-10 kata, bikin penasaran + mau topup. ' +
+    'NO emoji NO hashtag NO tanda kutip NO titik. Jangan vulgar langsung. ' +
+    'DILARANG: semoga, mungkin, sayang, nyamber, posing, buka kaki, bahasa daerah.';
 
-  var up = 'Text post Tevi hari ini.\n' +
+  var up = 'Text post Tevi:\n' +
     'Jenis: ' + ctaType + ' - ' + (ctaD[ctaType] || 'promo') + '\n' +
-    'Waktu: ' + time.timeOfDay + ', ' + time.day + ' | Suasana: ' + mood + '\n' +
-    'TULISAN (1 kalimat, tanpa titik):';
+    'Waktu: ' + time.timeOfDay + ', ' + time.day + ' | Mood: ' + mood + '\n' +
+    'TULISAN (1 kalimat, tanpa titik, tanpa emoji):';
 
-  for (var retry = 0; retry < 3; retry++) {
+  for (var retry = 0; retry < 2; retry++) {
     try {
-      var t1 = await callAI(sp, up, 100);
+      var spFinal = sp;
+      if (retry === 1) {
+        var goodEx = knowledge.getGoodExamples(context._goodContent, 'tevi', 1);
+        if (goodEx) spFinal = sp + ' REF: ' + goodEx.substring(0, 150);
+      }
+
+      // PASS 1: Generate
+      var t1 = await callAI(spFinal, up, 80);
+      if (!t1 || t1.trim().length < 3) continue;
+
+      // PASS 2: Humanize (compressed)
       var t2 = await humanize(t1, { ctaType: ctaType, time: time, mood: mood });
-      
+
       var bad = validator.checkBad(t2, context._badContent);
-      if (bad) { console.log('[BRAIN Tevi] REJECTED [' + bad + ']: ' + t2.substring(0, 50)); continue; }
-      
+      if (bad) { console.log('[BRAIN Tevi] retry ' + retry + ' REJECTED: ' + bad); continue; }
+
       return { text: t2, source: 'ai_humanized' };
     } catch(e) {
       console.log('[BRAIN Tevi] retry ' + retry + ' error:', (e.message || '').substring(0, 50));
     }
   }
-  
+
   // Fallback
-  console.log('[BRAIN Tevi] all retries failed, fallback');
+  console.log('[BRAIN Tevi] fallback');
   var catMap = { topup: 'topup_cta', exclusive: 'exclusive_cta', live: 'live_cta', vcs: 'vcs_cta' };
-  var cat = catMap[ctaType] || 'membership_cta';
+  var cat = catMap[ctaType] || 'default';
   try {
     var te = context._templateEngine;
     if (te) { var r = te.generate('tevi', cat); return { text: r.text, source: 'template' }; }
@@ -64,17 +73,14 @@ async function generate(context) {
 }
 
 async function humanize(text, ctx) {
-  var sp = 'Quality editor Baby Val. Kriteria: monoton? bot? cocok initiate?\nHumanize kalo perlu. Final touch kalo perlu.\nGOALS: Kedengeran manusia, genit, alami, gak kaku. Cocok buat Tevi text post NSFW.';
-  var up = 'Review text post:\n"' + text + '"\n\n' +
-    'KONTEKS: Tevi text post, ' + (ctx.ctaType || '') + ', ' + (ctx.time ? ctx.time.timeOfDay + ' ' + ctx.time.day : '') + ', mood ' + (ctx.mood || '') + '\n\n' +
-    '1. Kritik? 2. Versi final:\nTULIS VERSI FINAL SAJA (1 kalimat, tanpa label, tanpa emoji):';
+  var sp = 'Quality editor Tevi. Natural? Genit? Cocok buat post NSFW? Refine biar makin alami. Gak kaku.';
+  var up = 'Refine text post Tevi:\n"' + text + '"\n' +
+    (ctx.ctaType || '') + ' ' + (ctx.time ? ctx.time.timeOfDay : '') + ' mood ' + (ctx.mood || '') + '\n\n' +
+    'Versi final (1 kalimat, tanpa label):';
   try {
-    var f = await callAI(sp, up, 100);
+    var f = await callAI(sp, up, 80);
     f = f.replace(/^["']+|["']+$/g, '').trim();
-    var fi = f.indexOf('Versi final:');
-    if (fi !== -1) f = f.substring(fi + 12).trim();
-    else { var m = f.match(/2\.\s*([^]+)/); if (m && m[1]) f = m[1].trim(); }
-    return f.replace(/\.$/g, '');
+    return f.replace(/\.$/g, '') || text;
   } catch(e) { return text; }
 }
 

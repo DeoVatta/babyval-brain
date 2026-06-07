@@ -1,31 +1,62 @@
 /**
  * BABYVAL BRAIN — Main entry point
  * Modular AI Content Generation Engine
+ * 
+ * v2.0 — Added: Discord platform, 6-criteria validation, improved persona loader
  *
  * Usage:
  *   var Brain = require('babyval-brain');
  *   var brain = new Brain();
- *   var result = await brain.generate('x', { topic: 'GTA 6' });
- *   var result = await brain.generate('tevi', { ctaType: 'topup' });
+ *   
+ *   // Content generation
+ *   var x = await brain.generate('x', { topic: 'GTA 6' });
+ *   var tevi = await brain.generate('tevi', { ctaType: 'topup' });
+ *   
+ *   // Community reply
+ *   var discord = await brain.generate('discord', {
+ *     originalQuestion: 'Ada yang main RDR2?',
+ *     author: 'Deo',
+ *     channel: 'general',
+ *     topic: 'game'
+ *   });
+ *   
+ *   // Validate with 6 criteria
+ *   var v = brain.validate6('teks yang mau dicek', { platform: 'discord', originalQuestion: '...' });
  */
 var persona = require('./lib/persona');
 var deepseek = require('./lib/deepseek');
 var validator = require('./lib/validator');
 var knowledge = require('./lib/knowledge');
 
-// Platform generators — auto-loaded
+// Platform generators — auto-loaded (coba semua, skip yg gagal)
 var PLATFORMS = {};
-try { PLATFORMS.x = require('./platforms/x'); } catch(e) {}
-try { PLATFORMS.tevi = require('./platforms/tevi'); } catch(e) {}
+var PLATFORM_DIR = __dirname + '/platforms';
 
-// Template fallback
+var fs = require('fs');
+if (fs.existsSync(PLATFORM_DIR)) {
+  var files = fs.readdirSync(PLATFORM_DIR);
+  for (var fi = 0; fi < files.length; fi++) {
+    var f = files[fi];
+    if (f.endsWith('.js')) {
+      var pName = f.replace('.js', '');
+      try {
+        PLATFORMS[pName] = require('./platforms/' + pName);
+        console.log('[BRAIN] Loaded platform: ' + pName);
+      } catch(e) {
+        console.log('[BRAIN] Failed to load platform ' + pName + ': ' + (e.message || '').substring(0, 40));
+      }
+    }
+  }
+}
+
+// Template fallback engine
 var templateEngine = null;
 try { templateEngine = new (require('./lib/template'))(); } catch(e) {}
 
 class Brain {
   /**
    * @param {object} opts
-   * @param {string} opts.dbDir — path ke folder babyval-db (default: ../tools/babyval-db)
+   * @param {string} opts.dbDir — path ke folder babyval-db (default: auto-detect)
    */
   constructor(opts) {
     opts = opts || {};
@@ -43,12 +74,20 @@ class Brain {
     // Template fallback
     if (opts.templateEngine) {
       this.templateEngine = opts.templateEngine;
+    } else {
+      this.templateEngine = templateEngine;
     }
+
+    // Reload persona
+    persona.loadPersona();
+
+    console.log('[BRAIN] Initialized with ' + Object.keys(PLATFORMS).length + ' platforms: ' +
+      Object.keys(PLATFORMS).join(', '));
   }
 
   /**
    * Generate content for any platform
-   * @param {string} platform — 'x', 'tevi', etc
+   * @param {string} platform — 'x', 'tevi', 'discord', etc
    * @param {object} context — platform-specific context
    */
   async generate(platform, context) {
@@ -68,14 +107,21 @@ class Brain {
   }
 
   /**
-   * Validate content against bad patterns
+   * Validate content — 6 kriteria (monoton? humanize? solve? goals? value? persona?)
    */
-  validate(text, context) {
+  validate6(text, context) {
+    return validator.validate6Criteria(text, context || {});
+  }
+
+  /**
+   * Legacy: assess quality (good/mid/bad + score)
+   */
+  assessQuality(text, context) {
     return validator.assessQuality(text, context || {});
   }
 
   /**
-   * Quick check: apakah konten acceptable (good/mid, bukan bad)?
+   * Quick check: acceptable?
    */
   isAcceptable(text) {
     var q = validator.assessQuality(text);
@@ -83,10 +129,10 @@ class Brain {
   }
 
   /**
-   * Assess quality with suggestions
+   * Legacy: check bad content
    */
-  assessQuality(text, context) {
-    return validator.assessQuality(text, context);
+  checkBad(text) {
+    return validator.checkBad(text, this.badContent);
   }
 
   /**
@@ -111,7 +157,7 @@ class Brain {
   }
 
   /**
-   * Get time context
+   * Get time context (WIB-aware)
    */
   getTime() {
     return validator.getTimeContext();
@@ -124,13 +170,16 @@ class Brain {
     return Object.keys(PLATFORMS);
   }
 
-
-  // ===================== BACKWARD COMPAT =====================
-  /** @deprecated Use brain.generate('x', { topic }) instead */
-  async generateX(opts) { return this.generate('x', opts); }
-
-  /** @deprecated Use brain.generate('tevi', { ctaType }) instead */
-  async generateTeviText(opts) { return this.generate('tevi', opts); }
+  /**
+   * Reload knowledge dari DB (kalo ada update)
+   */
+  reloadKnowledge() {
+    this.research = knowledge.loadResearch();
+    this.goodContent = knowledge.loadGoodContent();
+    this.badContent = validator.loadBadContent();
+    persona.loadPersona();
+    console.log('[BRAIN] Knowledge reloaded');
+  }
 }
 
 module.exports = Brain;
